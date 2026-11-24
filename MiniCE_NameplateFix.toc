@@ -1,6 +1,6 @@
 ## Interface: 16001
 ## Title: |cff00ccffMiniCE|r Nameplate Fix
-## Notes: Makes MiniCE style the aura timers on Blizzard nameplates, including its remaining-time threshold colors when the game allows it.
+## Notes: Makes MiniCE style the aura timers on Blizzard nameplates, including its remaining-time threshold colors.
 ## Author: DrPurr
 ## Version: 1.0.0
 ## Dependencies: MinimalistCooldownEdge

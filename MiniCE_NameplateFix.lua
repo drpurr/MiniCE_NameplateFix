@@ -10,9 +10,10 @@
 --
 -- Threshold colors: MiniCE never applies its "Color by Remaining Time" thresholds to nameplates
 -- (DurationColorController.lua IsThresholdColorAllowedForSource). Below, each claimed timer is colored with
--- MiniCE's threshold curve from the aura's Duration object (C_UnitAuras.GetAuraDuration). The client only gives
--- addons that Duration while auras are not restricted (ShouldAurasBeSecret() false; the API needs aura access
--- and rejects secret arguments from addon code). While restricted, timers keep MiniCE's static nameplate color.
+-- MiniCE's current threshold curve, re-read every tick so color changes in MiniCE apply right away. The remaining
+-- time comes from the timer's own Cooldown (GetCooldownTimes: the start/duration Blizzard passed to
+-- CooldownFrame_Set) whenever those are readable; C_UnitAuras.GetAuraDuration is only a fallback, since the
+-- client refuses addon aura access while auras are restricted.
 
 local MCE = LibStub("AceAddon-3.0"):GetAddon("MinimalistCooldownEdge", true)
 if (not MCE) then return end
@@ -93,7 +94,34 @@ local function Plain(value)
 	return value ~= nil and not issecretvalue(value) and value or nil
 end
 
-local function Duration(item)
+-- Global on Forever (TPerl uses it), namespaced on Midnight
+local ShouldAurasBeSecretFn = (C_Secrets and C_Secrets.ShouldAurasBeSecret) or _G.ShouldAurasBeSecret
+local function AurasRestricted()
+	return ShouldAurasBeSecretFn ~= nil and ShouldAurasBeSecretFn() and true or false
+end
+
+local cooldownDurations = setmetatable({}, {__mode = "k"})	-- cooldown -> reusable Duration object
+
+-- From the Cooldown's own times (milliseconds), when they are plain numbers
+local function CooldownDuration(cooldown)
+	local ok, start, length = pcall(cooldown.GetCooldownTimes, cooldown)
+	start, length = ok and Plain(start), ok and Plain(length)
+	if (type(start) ~= "number" or type(length) ~= "number" or length <= 0) then
+		return nil
+	end
+	local duration = cooldownDurations[cooldown]
+	if (not duration) then
+		duration = C_DurationUtil.CreateDuration()
+		cooldownDurations[cooldown] = duration
+	end
+	duration:SetTimeFromStart(start / 1000, length / 1000)
+	return duration
+end
+
+local function AuraDuration(item)
+	if (AurasRestricted()) then
+		return nil
+	end
 	local unit, id = Plain(item.unitToken), Plain(item.auraInstanceID)
 	if (type(unit) ~= "string" or type(id) ~= "number") then
 		return nil
@@ -104,7 +132,7 @@ end
 
 -- true if the timer got a threshold color
 local function ColorItem(item, cooldown, curve, engine)
-	local duration = curve and Duration(item)
+	local duration = curve and (CooldownDuration(cooldown) or AuraDuration(item))
 	if (duration) then
 		local ok, color = pcall(duration.EvaluateRemainingDuration, duration, curve)
 		if (ok and color) then
@@ -115,12 +143,6 @@ local function ColorItem(item, cooldown, curve, engine)
 	return false
 end
 
--- Global on Forever (TPerl uses it), namespaced on Midnight
-local ShouldAurasBeSecretFn = (C_Secrets and C_Secrets.ShouldAurasBeSecret) or _G.ShouldAurasBeSecret
-local function AurasRestricted()
-	return ShouldAurasBeSecretFn ~= nil and ShouldAurasBeSecretFn() and true or false
-end
-
 local colored = setmetatable({}, {__mode = "k"})	-- cooldowns currently showing a threshold color
 
 local function Tick()
@@ -129,11 +151,10 @@ local function Tick()
 		return
 	end
 	local curve = ThresholdCurve()
-	local restricted = AurasRestricted()
 	local config = NameplateConfig()
 	for item, cooldown in pairs(tracked) do
 		local shown = item:IsVisible()
-		if (shown and not issecretvalue(shown) and not restricted and ColorItem(item, cooldown, curve, engine)) then
+		if (shown and not issecretvalue(shown) and ColorItem(item, cooldown, curve, engine)) then
 			colored[cooldown] = true
 		elseif (colored[cooldown]) then
 			colored[cooldown] = nil
